@@ -1,0 +1,78 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#e8392b"><title>ClipPulse</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#16161a;--mut:#6b6b76;--acc:#e8392b;--line:#e3e1dc}
+@media(prefers-color-scheme:dark){:root{--bg:#121214;--card:#1c1c20;--ink:#f2f2f4;--mut:#9a9aa6;--line:#2c2c33}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}
+main{max-width:900px;margin:0 auto;padding:16px}h1{font-size:24px;margin:4px 0}h1 span{color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select,button,.btn{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 12px;text-decoration:none}
+input[type=text]{flex:1;min-width:200px}input[type=number]{width:90px}
+button,.btn{cursor:pointer}.p{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.mut{color:var(--mut);font-size:13px}.err{color:var(--acc)}
+.bar{height:8px;background:var(--line);border-radius:9px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .4s}
+.clip{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.ed{display:flex;gap:16px;flex-wrap:wrap}.ph{position:relative;width:min(100%,270px);aspect-ratio:9/16;background:#000;border-radius:14px;overflow:hidden;flex:none;margin:auto}
+.ph video{width:100%;height:100%;object-fit:cover}.cap{position:absolute;left:5%;right:5%;text-align:center;font-weight:800;color:#fff;text-shadow:0 0 4px #000,0 0 4px #000,0 0 4px #000;pointer-events:none}
+.ctl{flex:1;min-width:250px;display:grid;gap:10px}.ln{display:flex;gap:6px;margin:4px 0}.ln input{flex:1;min-width:0}.ln span{width:46px;font-size:12px;color:var(--mut);align-self:center}
+#lines{max-height:240px;overflow:auto}#res video{width:min(100%,270px);border-radius:12px}[hidden]{display:none!important}
+</style></head><body><main>
+<h1>Clip<span>Pulse</span></h1>
+<p class="mut">1 Paste a YouTube link · 2 We find the best moments · 3 Edit · 4 Export captioned shorts</p>
+<div class="card"><div class="row"><input type="text" id="url" placeholder="https://www.youtube.com/watch?v=…" inputmode="url"><button class="p" id="go">Find clips</button></div>
+<div id="prog" hidden><div class="bar"><i id="bar"></i></div><div class="mut" id="stat"></div></div><div class="err" id="err"></div></div>
+<div class="card" id="cl" hidden><b>Suggested clips</b><div id="clips"></div></div>
+<div class="card" id="ed" hidden><b>Edit &amp; export</b>
+<div class="ed"><div class="ph" id="ph"><video id="vid" playsinline controls></video><div class="cap" id="cap"></div></div>
+<div class="ctl">
+<div class="row"><button id="play">▶ Play clip</button><span class="mut" id="dur"></span></div>
+<div class="row">Start <input type="number" id="st" step="0.1"><button data-k="st" data-d="-0.5">−</button><button data-k="st" data-d="0.5">+</button></div>
+<div class="row">End <input type="number" id="en" step="0.1"><button data-k="en" data-d="-0.5">−</button><button data-k="en" data-d="0.5">+</button></div>
+<label class="mut">Crop position (left ↔ right) <input type="range" id="cx" min="0" max="1" step="0.01" value="0.5" style="width:100%"></label>
+<div class="row"><select id="pos"><option value="low">Captions: lower</option><option value="mid">Captions: center</option></select>
+<select id="col"><option value="white">White</option><option value="yellow">Yellow</option><option value="green">Green</option></select>
+<label class="mut">Size <input type="range" id="sz" min="50" max="120" value="78"></label></div>
+<div><div class="row" style="justify-content:space-between"><b>Captions</b><button id="rb">Rebuild from speech</button></div><div id="lines"></div></div>
+<button class="p" id="exp">Export MP4</button></div></div><div id="res" style="margin-top:12px"></div></div>
+</main>
+<script>
+const $=s=>document.querySelector(s),esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let job=null,cur=null,vsrc='';
+const fmt=t=>{t=Math.max(0,t);const m=Math.floor(t/60),s=(t%60).toFixed(1);return m+':'+(s<10?'0':'')+s};
+async function api(u,o){const r=await fetch(u,o);if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}return r.json()}
+const post=(u,b)=>api(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+$('#go').onclick=async()=>{const url=$('#url').value.trim();if(!url)return;$('#err').textContent='';$('#cl').hidden=$('#ed').hidden=true;
+ try{const{id}=await post('/api/jobs',{url});poll(id)}catch(e){$('#err').textContent=e.message}};
+function poll(id){$('#prog').hidden=false;const names={queued:'Waiting in queue…',downloading:'Downloading video…',transcribing:'Transcribing speech…',finding:'Finding the best moments…',done:'Done',error:'Failed'};
+ const t=setInterval(async()=>{try{const j=await api('/api/jobs/'+id);$('#bar').style.width=j.progress+'%';$('#stat').textContent=names[j.status]+(j.title?' · '+j.title:'');
+  if(j.status==='done'){clearInterval(t);job=j;showClips()}if(j.status==='error'){clearInterval(t);$('#err').textContent=j.error}}
+  catch(e){clearInterval(t);$('#err').textContent=e.message}},2000)}
+function showClips(){$('#cl').hidden=false;const box=$('#clips');box.innerHTML=job.clips.length?'':'<p class="mut">No speech found in this video.</p>';
+ job.clips.forEach((c,i)=>{const d=document.createElement('div');d.className='clip';d.innerHTML='<div><b>'+esc(c.title)+'…</b><div class="mut">'+fmt(c.start)+' – '+fmt(c.end)+' · score '+c.score+'</div></div><button class="p">Edit</button>';d.querySelector('button').onclick=()=>open(c);box.append(d)})}
+function build(start,end){const ws=job.words.filter(w=>w[2]>start&&w[1]<end),L=[];let c=[];
+ const fl=()=>{if(c.length){L.push({s:c[0][1],e:c[c.length-1][2],t:c.map(w=>w[0]).join(' ')});c=[]}};
+ for(const w of ws){if(c.length&&w[1]-c[c.length-1][2]>0.6)fl();c.push(w);if(c.length>=4||/[.?!,]$/.test(w[0]))fl()}fl();return L}
+function open(c){cur={start:c.start,end:c.end,lines:build(c.start,c.end)};const v=$('#vid'),src='/api/files/'+job.id+'/'+job.source;if(vsrc!==src){v.src=src;vsrc=src}
+ $('#st').value=c.start;$('#en').value=c.end;$('#res').innerHTML='';$('#ed').hidden=false;lines();set();v.currentTime=c.start;$('#ed').scrollIntoView({behavior:'smooth'})}
+function set(){cur.start=+$('#st').value;cur.end=+$('#en').value;cur.cx=+$('#cx').value;cur.pos=$('#pos').value;cur.color=$('#col').value;cur.size=+$('#sz').value;
+ $('#vid').style.objectPosition=(cur.cx*100)+'% 50%';$('#dur').textContent=(cur.end-cur.start).toFixed(1)+'s';cap()}
+function cap(){const v=$('#vid'),t=v.currentTime,c=$('#cap'),l=cur&&cur.lines.find(x=>t>=x.s&&t<x.e&&t>=cur.start&&t<=cur.end);
+ c.textContent=l?l.t.toUpperCase():'';c.style.fontSize=(cur.size/1080*$('#ph').clientWidth)+'px';c.style.color={white:'#fff',yellow:'#ffe14d',green:'#4dff7a'}[cur.color];
+ if(cur.pos==='low'){c.style.bottom='20%';c.style.top='auto';c.style.transform='none'}else{c.style.top='50%';c.style.bottom='auto';c.style.transform='translateY(-50%)'}}
+function lines(){const box=$('#lines');box.innerHTML='';cur.lines.forEach((l,i)=>{const r=document.createElement('div');r.className='ln';const sp=document.createElement('span');sp.textContent=fmt(l.s);
+ const inp=document.createElement('input');inp.value=l.t;inp.oninput=()=>{l.t=inp.value};inp.onfocus=()=>{$('#vid').currentTime=l.s};const x=document.createElement('button');x.textContent='✕';x.onclick=()=>{cur.lines.splice(i,1);lines()};
+ r.append(sp,inp,x);box.append(r)})}
+$('#vid').ontimeupdate=()=>{if(!cur)return;const v=$('#vid');if(!v.paused&&v.currentTime>=cur.end)v.pause();cap()};
+$('#play').onclick=()=>{set();const v=$('#vid');v.currentTime=cur.start;v.play()};
+['st','en','cx','pos','col','sz'].forEach(id=>$('#'+id).oninput=()=>{set();if(id==='st')$('#vid').currentTime=cur.start});
+document.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>{const e=$('#'+b.dataset.k);e.value=(+e.value+ +b.dataset.d).toFixed(1);set();$('#vid').currentTime=b.dataset.k==='st'?cur.start:Math.max(cur.start,cur.end-2)});
+$('#rb').onclick=()=>{set();cur.lines=build(cur.start,cur.end);lines()};
+$('#exp').onclick=async()=>{set();$('#res').textContent='Rendering… this can take a minute.';
+ try{const{id}=await post('/api/jobs/'+job.id+'/render',{start:cur.start,end:cur.end,lines:cur.lines,cx:cur.cx,pos:cur.pos,color:cur.color,size:cur.size});
+  const t=setInterval(async()=>{try{const r=await api('/api/renders/'+id);
+   if(r.status==='done'){clearInterval(t);$('#res').innerHTML='<video controls playsinline src="'+r.url+'"></video><p><a class="btn p" href="'+r.url+'" download="short.mp4">Download MP4</a></p>'}
+   if(r.status==='error'){clearInterval(t);$('#res').textContent='Render failed: '+r.error}}catch(e){clearInterval(t);$('#res').textContent=e.message}},1500)}
+ catch(e){$('#res').textContent=e.message}};
+</script></body></html>
